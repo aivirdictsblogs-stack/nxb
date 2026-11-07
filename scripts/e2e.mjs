@@ -1,0 +1,34 @@
+// Live integration check against a running Worker (npm run dev:worker). Usage: BASE=http://127.0.0.1:8787 SETUP_TOKEN=... node scripts/e2e.mjs
+const BASE = process.env.BASE ?? 'http://127.0.0.1:8787', TOKEN = process.env.SETUP_TOKEN ?? 'local-setup-token-123';
+let fails = 0; const ok = (c, m) => { console.log(`${c ? 'PASS' : 'FAIL'}  ${m}`); if (!c) fails++; };
+class C { cookie = ''; csrf = '';
+  async r(method, path, body, h = {}) { const res = await fetch(BASE + path, { method, headers: { 'content-type': 'application/json', ...(this.cookie && { cookie: this.cookie }), ...(this.csrf && { 'x-csrf-token': this.csrf }), ...h }, body: body === undefined ? undefined : JSON.stringify(body) });
+    const sc = res.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; const t = await res.text(); let j = null; try { j = JSON.parse(t); } catch {} if (j?.csrf) this.csrf = j.csrf; return { s: res.status, j, t }; } }
+const id = Date.now().toString(36);
+const sa = new C(), cust = new C(), fin = new C();
+let r = await sa.r('POST', '/api/setup/super-admin', { email: `root${id}@noorix.test`, full_name: 'Root Admin', password: 'SuperSecret#12345' }, { 'x-setup-token': TOKEN });
+ok(r.s === 201 || r.s === 410, 'super admin setup (201 first run / 410 already done)');
+const rootEmail = r.s === 201 ? `root${id}@noorix.test` : process.env.ROOT_EMAIL;
+r = await sa.r('POST', '/api/auth/login', { email: rootEmail, password: 'SuperSecret#12345' }); ok(r.s === 200, 'super admin login');
+r = await sa.r('POST', '/api/admin/staff', { email: `fin${id}@noorix.test`, full_name: 'Finance', password: 'FinancePass#123', role_id: 'finance_manager' }); ok(r.s === 201, 'create finance staff');
+await fin.r('POST', '/api/auth/login', { email: `fin${id}@noorix.test`, password: 'FinancePass#123' });
+r = await sa.r('PATCH', '/api/admin/payment-methods/pm-ep', { is_active: true, account_number: '03000000000', account_title: 'Noorix' }); ok(r.s === 200, 'activate Easypaisa');
+r = await cust.r('POST', '/api/auth/register', { full_name: 'E2E Customer', email: `c${id}@example.com`, phone: '03001234567', password: 'Passw0rd!x', confirm_password: 'Passw0rd!x' }); ok(r.s === 201, 'customer registers');
+const uid = r.j.user.id;
+r = await cust.r('POST', '/api/me/deposits', { payment_method_id: 'pm-ep', amount_minor: 100000, payment_reference: `E2E${id}`, proof_key: `proofs/${uid}/none` }); ok(r.s === 201, 'deposit submitted (pending)');
+const dep = r.j.id; r = await cust.r('GET', '/api/me/wallet'); ok(r.j.balance_minor === 0, 'wallet not credited before approval');
+r = await cust.r('POST', '/api/admin/deposits/' + dep + '/approve', {}); ok(r.s === 403, 'customer cannot approve deposits');
+r = await fin.r('POST', `/api/admin/deposits/${dep}/approve`, {}); ok(r.s === 200, 'finance approves deposit');
+r = await fin.r('POST', `/api/admin/deposits/${dep}/approve`, {}); ok(r.s === 409, 'second approval rejected');
+r = await cust.r('GET', '/api/me/wallet'); ok(r.j.balance_minor === 100000, 'wallet credited exactly once');
+const key = crypto.randomUUID(); const body = { plan_id: 'pl-netflix-1', contact_name: 'E2E', contact_email: `c${id}@example.com`, contact_phone: '03001234567', inputs: {} };
+const rs = await Promise.all([1, 2, 3].map(() => cust.r('POST', '/api/me/checkout', body, { 'idempotency-key': key }))); ok(rs.filter(x => x.s === 201).length >= 1 && new Set(rs.map(x => x.j?.order?.id)).size === 1, 'parallel duplicate checkout -> one order');
+const oid = rs.find(x => x.j?.order).j.order.id; r = await cust.r('GET', '/api/me/wallet'); ok(r.j.balance_minor === 70100, 'charged once (PKR 299)');
+const om = new C(); r = await sa.r('POST', `/api/admin/orders/${oid}/deliver`, { details: 'login: a@b.c / pass: 123' }); ok(r.s === 200, 'staff delivers manually');
+r = await cust.r('GET', `/api/me/orders/${oid}`); ok(r.j.delivery?.details === 'login: a@b.c / pass: 123' && r.j.order.status === 'completed', 'customer sees delivery + completed');
+r = await new C().r('GET', `/api/me/orders/${oid}`); ok(r.s === 401, 'anonymous cannot read order');
+r = await cust.r('GET', '/api/admin/dashboard'); ok(r.s === 403, 'customer blocked from admin API');
+r = await sa.r('GET', '/api/admin/dashboard'); ok(r.s === 200 && r.j.total_orders >= 1, 'admin dashboard has real data');
+r = await sa.r('GET', '/api/admin/audit-logs'); ok(r.j.logs.some(l => l.action === 'deposit.approve'), 'deposit approval audited');
+r = await cust.r('GET', '/api/auth/providers'); ok(r.j.google === false, 'Google sign-in inactive without credentials');
+console.log(fails ? `\n${fails} FAILED` : '\nALL E2E CHECKS PASSED'); process.exit(fails ? 1 : 0);

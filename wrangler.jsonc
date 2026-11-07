@@ -1,0 +1,15 @@
+{
+  "name": "noorix-digital-lab",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2025-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/sitemap.xml"]
+  },
+  "d1_databases": [{ "binding": "DB", "database_name": "noorix-db", "database_id": "REPLACE_WITH_D1_ID", "migrations_dir": "migrations" }],
+  "r2_buckets": [{ "binding": "UPLOADS", "bucket_name": "noorix-uploads" }],
+  "vars": { "APP_URL": "https://noorixdigitallab.online", "ENVIRONMENT": "production" }
+}

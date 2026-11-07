@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /dashboard
+Disallow: /checkout
+Disallow: /api/
+Sitemap: https://noorixdigitallab.online/sitemap.xml
